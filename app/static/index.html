@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>StockLint — Adobe Stock Checker</title>
+<style>
+:root{--bg:#0f1117;--card:#1a1d27;--card2:#21253a;--line:#2a2e3a;--fg:#e6e8ee;--mut:#8890a4;
+      --pass:#3fb950;--warn:#d29922;--fail:#f85149;--acc:#6c8cff;--hover:#252a3a}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font:14px/1.5 system-ui,sans-serif;background:var(--bg);color:var(--fg);height:100vh;display:flex;flex-direction:column;overflow:hidden}
+
+.hdr{background:var(--card);border-bottom:1px solid var(--line);padding:10px 20px;
+     display:flex;align-items:center;gap:12px;flex-shrink:0}
+.hdr h1{font-size:17px;font-weight:700}
+.spacer{flex:1}
+.badge{background:#0c0e14;border:1px solid var(--line);padding:2px 10px;border-radius:20px;font-size:12px;color:var(--mut)}
+
+.body{display:flex;flex:1;overflow:hidden}
+.side{width:300px;flex-shrink:0;background:var(--card);border-right:1px solid var(--line);display:flex;flex-direction:column;overflow:hidden}
+.main{flex:1;overflow-y:auto;padding:24px}
+
+/* === Folder picker === */
+.picker-area{padding:16px;border-bottom:1px solid var(--line)}
+
+.drop-zone{border:2px dashed var(--line);border-radius:12px;padding:28px 16px;
+           text-align:center;cursor:pointer;transition:.2s;position:relative}
+.drop-zone:hover,.drop-zone.over{border-color:var(--acc);background:#6c8cff0d}
+.drop-zone svg{color:var(--mut);margin-bottom:10px}
+.drop-zone .dz-title{font-size:14px;font-weight:600;color:var(--fg);margin-bottom:3px}
+.drop-zone .dz-sub{font-size:12px;color:var(--mut)}
+/* hide native file input but keep it accessible */
+.drop-zone input[type=file]{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%}
+
+.or-row{display:flex;align-items:center;gap:10px;margin:10px 0;color:var(--mut);font-size:12px}
+.or-row::before,.or-row::after{content:'';flex:1;height:1px;background:var(--line)}
+
+.btn-browse{width:100%;background:var(--card2);border:1px solid var(--line);color:var(--fg);
+            border-radius:8px;padding:10px;font:inherit;font-size:14px;font-weight:600;
+            cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;transition:.15s}
+.btn-browse:hover{background:var(--hover);border-color:var(--acc)}
+
+.folder-chosen{display:none;background:#6c8cff12;border:1px solid #6c8cff40;border-radius:8px;
+               padding:10px 12px;margin-top:10px}
+.folder-chosen .fc-name{font-size:13px;font-weight:600;color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.folder-chosen .fc-info{font-size:12px;color:var(--mut);margin-top:2px}
+
+/* === Options === */
+.opts{padding:12px 16px;border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:8px}
+.opt-row{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--mut)}
+.opt-row input[type=checkbox]{accent-color:var(--acc);width:14px;height:14px;cursor:pointer;flex-shrink:0}
+.opt-row label{cursor:pointer}
+
+/* === Run/Stop === */
+.run-area{padding:12px 16px;border-bottom:1px solid var(--line)}
+.btn-run{width:100%;background:var(--acc);color:#fff;border:0;border-radius:8px;padding:11px;
+         font:inherit;font-weight:700;font-size:15px;cursor:pointer;transition:.15s}
+.btn-run:hover{background:#7a9aff}
+.btn-run:disabled{opacity:.35;cursor:not-allowed}
+.btn-stop{width:100%;background:#b3403a;color:#fff;border:0;border-radius:8px;padding:11px;
+          font:inherit;font-weight:700;font-size:15px;cursor:pointer;display:none}
+
+/* === Counters === */
+.counters{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--line)}
+.ctr{background:var(--card);padding:10px 4px;text-align:center}
+.ctr .num{font-size:21px;font-weight:700;line-height:1}
+.ctr .lbl{font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--mut);margin-top:2px}
+.ctr.tot .num{color:var(--fg)}.ctr.pas .num{color:var(--pass)}.ctr.wrn .num{color:var(--warn)}.ctr.fal .num{color:var(--fail)}
+
+/* === Progress === */
+.prog{padding:8px 14px;border-bottom:1px solid var(--line);display:none}
+.prog-bar{height:4px;background:var(--line);border-radius:2px;overflow:hidden}
+.prog-fill{height:100%;background:var(--acc);width:0%;transition:width .2s;border-radius:2px}
+.prog-text{font-size:11px;color:var(--mut);margin-top:4px}
+
+/* === File list === */
+.list-hdr{padding:7px 14px;font-size:11px;font-weight:600;text-transform:uppercase;
+          letter-spacing:.8px;color:var(--mut);border-bottom:1px solid var(--line)}
+.file-list{flex:1;overflow-y:auto}
+.file-item{display:flex;align-items:center;gap:7px;padding:7px 12px;cursor:pointer;
+           transition:.1s;border-bottom:1px solid #ffffff05}
+.file-item:hover{background:var(--hover)}
+.file-item.active{background:#6c8cff18;border-right:2px solid var(--acc)}
+.dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.dot.pass{background:var(--pass)}.dot.warn{background:var(--warn)}.dot.fail{background:var(--fail)}
+.fi-name{flex:1;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fi-tag{font-size:10px;font-weight:700;text-transform:uppercase;padding:1px 6px;border-radius:10px;flex-shrink:0}
+.fi-tag.fail{background:#f8514918;color:var(--fail)}.fi-tag.warn{background:#d2992218;color:var(--warn)}
+
+/* === Bottom actions === */
+.btm{padding:12px 14px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:6px}
+.btn-del{background:#6b1212;border:1px solid #f8514960;color:#ffb3b3;border-radius:8px;
+         padding:9px;font:inherit;font-weight:600;cursor:pointer;display:none;font-size:13px;transition:.15s}
+.btn-del:hover:not(:disabled){background:#8a1818}
+.btn-del:disabled{opacity:.5;cursor:not-allowed}
+.btn-row{display:flex;gap:6px}
+.btn-sm{flex:1;background:var(--card2);border:1px solid var(--line);color:var(--fg);border-radius:7px;padding:7px;font:inherit;font-size:12px;cursor:pointer}
+.btn-sm:hover{background:var(--hover)}
+
+/* === Main panel === */
+.empty{display:flex;flex-direction:column;align-items:center;justify-content:center;
+       height:55vh;gap:14px;color:var(--mut);text-align:center}
+.empty-icon{font-size:52px;line-height:1}
+
+/* === Report === */
+.check-row{display:grid;grid-template-columns:22px 165px 1fr auto;align-items:start;
+           gap:8px;padding:9px 12px;background:var(--card);border-radius:7px;
+           border:1px solid var(--line);margin-bottom:5px}
+.check-row.fail{border-color:#f8514940;background:#f8514906}
+.check-row.warn{border-color:#d2992240;background:#d2992206}
+.check-row.pass{border-color:#3fb95020}
+.ci{font-size:13px;margin-top:1px}.cn{font-size:13px;font-weight:500}
+.cm{font-size:12px;color:var(--mut);word-break:break-word}.cv{font-size:11px;color:var(--mut);font-family:monospace;white-space:nowrap}
+.sec{margin-bottom:18px}.sec-t{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.8px;color:var(--mut);margin-bottom:8px}
+.rpt-name{font-size:15px;font-weight:600;margin-bottom:4px;word-break:break-all}
+.rpt-path{font-size:11px;color:var(--mut);margin-bottom:8px;word-break:break-all}
+.ob{display:inline-block;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700;text-transform:uppercase}
+.ob.pass{background:#3fb95020;color:var(--pass);border:1px solid var(--pass)}
+.ob.warn{background:#d2992220;color:var(--warn);border:1px solid var(--warn)}
+.ob.fail{background:#f8514920;color:var(--fail);border:1px solid var(--fail)}
+.rpt-stats{display:flex;gap:14px;margin-top:6px;font-size:12px;color:var(--mut)}
+.rpt-stats b{color:var(--fg)}
+
+/* === Confirm dialog === */
+.overlay{display:none;position:fixed;inset:0;background:#000000bb;z-index:100;align-items:center;justify-content:center}
+.overlay.show{display:flex}
+.dialog{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:26px;max-width:400px;width:90%}
+.dialog h3{font-size:16px;margin-bottom:10px;color:var(--fail)}
+.dialog p{color:var(--mut);font-size:13px;line-height:1.7;margin-bottom:20px}
+.dlg-btns{display:flex;gap:10px;justify-content:flex-end}
+.btn-cc{background:var(--card2);border:1px solid var(--line);color:var(--fg);border-radius:7px;padding:9px 18px;font:inherit;cursor:pointer}
+.btn-cdel{background:#b3403a;color:#fff;border:0;border-radius:7px;padding:9px 18px;font:inherit;font-weight:600;cursor:pointer}
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<div class="hdr">
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6c8cff" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+  <h1>StockLint</h1>
+  <span style="font-size:13px;color:var(--mut)">Adobe Stock Quality Checker</span>
+  <div class="spacer"></div>
+  <span id="keyBadge" class="badge">…</span>
+</div>
+
+<div class="body">
+
+<!-- ── Sidebar ── -->
+<div class="side">
+
+  <!-- Folder picker -->
+  <div class="picker-area">
+    <!-- Drop zone -->
+    <div class="drop-zone" id="dropZone">
+      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+      <div class="dz-title">Drop your image folder here</div>
+      <div class="dz-sub">Drag a folder from Finder</div>
+    </div>
+
+    <div class="or-row">or</div>
+
+    <!-- Browse button — opens native OS dialog via server -->
+    <button class="btn-browse" id="browseBtn">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+      Browse for Folder…
+    </button>
+
+    <!-- Chosen folder display -->
+    <div class="folder-chosen" id="folderChosen">
+      <div class="fc-name" id="fcName">—</div>
+      <div class="fc-info" id="fcInfo">—</div>
+    </div>
+  </div>
+
+  <!-- Options -->
+  <div class="opts">
+    <div class="opt-row">
+      <input type="checkbox" id="skipVision" checked/>
+      <label for="skipVision">Technical checks only (fast, no API key needed)</label>
+    </div>
+    <div class="opt-row">
+      <input type="checkbox" id="failOnly" checked/>
+      <label for="failOnly">Show only FAIL &amp; WARN in list</label>
+    </div>
+  </div>
+
+  <!-- Run / Stop -->
+  <div class="run-area">
+    <button class="btn-run" id="runBtn" disabled>▶&nbsp; Start Checking</button>
+    <button class="btn-stop" id="stopBtn">⏹&nbsp; Stop</button>
+  </div>
+
+  <!-- Counters -->
+  <div class="counters">
+    <div class="ctr tot"><div class="num" id="cTotal">0</div><div class="lbl">Total</div></div>
+    <div class="ctr pas"><div class="num" id="cPass">0</div><div class="lbl">Pass</div></div>
+    <div class="ctr wrn"><div class="num" id="cWarn">0</div><div class="lbl">Warn</div></div>
+    <div class="ctr fal"><div class="num" id="cFail">0</div><div class="lbl">Fail</div></div>
+  </div>
+
+  <!-- Progress -->
+  <div class="prog" id="progWrap">
+    <div class="prog-bar"><div class="prog-fill" id="progFill"></div></div>
+    <div class="prog-text" id="progText">0 / 0</div>
+  </div>
+
+  <!-- List header -->
+  <div class="list-hdr" id="listLabel">Issues (0)</div>
+  <div class="file-list" id="fileList"></div>
+
+  <!-- Bottom actions -->
+  <div class="btm">
+    <button class="btn-del" id="delBtn">🗑&nbsp; Delete <span id="failCount">0</span> FAIL Images</button>
+    <div class="btn-row">
+      <button class="btn-sm" id="clearBtn">Clear</button>
+      <button class="btn-sm" id="csvBtn">Export CSV</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Main panel ── -->
+<div class="main" id="mainPanel">
+  <div class="empty">
+    <div class="empty-icon">📁</div>
+    <p style="font-size:16px;font-weight:600;color:var(--fg)">Select your image folder</p>
+    <p style="font-size:13px;line-height:1.8">Drop a folder from Finder onto the left panel<br>or click <b style="color:var(--acc)">Browse for Folder</b></p>
+    <p style="font-size:12px;margin-top:4px">Supports 500–1000+ JPEG images<br>Checks against Adobe Stock quality rules</p>
+  </div>
+</div>
+</div>
+
+<!-- Delete confirm dialog -->
+<div class="overlay" id="overlay">
+  <div class="dialog">
+    <h3>⚠️ Delete FAIL Images?</h3>
+    <p id="dlgText">…</p>
+    <div class="dlg-btns">
+      <button class="btn-cc" id="dlgCancel">Cancel</button>
+      <button class="btn-cdel" id="dlgConfirm">Yes, Delete Permanently</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+
+let folderPath = '';
+let totalCount = 0;
+let results    = [];
+let activeIdx  = null;
+let es         = null;
+let counts     = {total:0, pass:0, warn:0, fail:0};
+
+// ── Status badge ──────────────────────────────────────────────────────────────
+fetch('/api/status').then(r=>r.json()).then(d=>{
+  $('keyBadge').textContent = d.keys > 0 ? `🔑 ${d.keys} key · ${d.model}` : '⚠️ No API key';
+}).catch(()=>{});
+
+// ── Folder chosen display ─────────────────────────────────────────────────────
+function showFolderChosen(path, count) {
+  folderPath = path;
+  totalCount = count;
+  const name = path.split('/').pop() || path;
+  $('fcName').textContent = '📁 ' + name;
+  $('fcInfo').textContent = count > 0 ? `${count} JPEG image${count!==1?'s':''} found` : 'No JPEG images found';
+  $('folderChosen').style.display = 'block';
+  $('runBtn').disabled = count === 0;
+  $('runBtn').textContent = count > 0 ? `▶  Check ${count} Images` : '▶  Start Checking';
+}
+
+async function scanPath(path) {
+  try {
+    const r = await fetch('/api/scan-folder', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({path})});
+    const d = await r.json();
+    if (d.error) { alert('Error: ' + d.error); return; }
+    showFolderChosen(d.folder, d.count);
+  } catch(e) { alert('Could not scan folder: ' + e); }
+}
+
+// ── Browse button → native OS picker ─────────────────────────────────────────
+$('browseBtn').addEventListener('click', async () => {
+  $('browseBtn').textContent = 'Opening…';
+  $('browseBtn').disabled = true;
+  try {
+    const r = await fetch('/api/pick-folder');
+    const d = await r.json();
+    if (d.error) { alert('Error: ' + d.error); return; }
+    if (!d.cancelled && d.path) await scanPath(d.path);
+  } catch(e) { alert('Error: ' + e); }
+  finally {
+    $('browseBtn').innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg> Browse for Folder…`;
+    $('browseBtn').disabled = false;
+  }
+});
+
+// ── Drop zone — clicking opens Browse dialog ──────────────────────────────────
+const dz = $('dropZone');
+dz.style.cursor = 'pointer';
+dz.addEventListener('click', () => $('browseBtn').click());
+
+// ── Drag folder onto drop zone ────────────────────────────────────────────────
+dz.addEventListener('dragenter', e => { e.preventDefault(); e.stopPropagation(); dz.classList.add('over'); });
+dz.addEventListener('dragover',  e => { e.preventDefault(); e.stopPropagation(); dz.classList.add('over'); });
+dz.addEventListener('dragleave', e => { e.preventDefault(); e.stopPropagation(); if (!dz.contains(e.relatedTarget)) dz.classList.remove('over'); });
+dz.addEventListener('drop', async e => {
+  e.preventDefault(); e.stopPropagation();
+  dz.classList.remove('over');
+
+  // 1. Try file.path (works in VS Code built-in browser / Electron)
+  const files = [...(e.dataTransfer.files || [])];
+  if (files.length > 0 && files[0].path) {
+    const p = files[0].path;
+    const dir = p.substring(0, p.lastIndexOf('/'));
+    if (dir) { await scanPath(dir); return; }
+  }
+
+  // 2. Try webkitGetAsEntry to detect a folder drop
+  const item = e.dataTransfer.items?.[0];
+  if (item) {
+    const entry = item.webkitGetAsEntry?.();
+    if (entry?.isDirectory) {
+      // Browser gives us the name but not the absolute path.
+      // Open native picker — user just confirms the same folder.
+      $('fcName').textContent = '📁 ' + entry.name;
+      $('fcInfo').textContent = 'Opening native picker to confirm path…';
+      $('folderChosen').style.display = 'block';
+      $('browseBtn').click();
+      return;
+    }
+  }
+
+  // 3. Files dropped directly — collect JPEGs and use upload mode
+  const jpgs = files.filter(f => f.name.match(/\.jpe?g$/i));
+  if (jpgs.length) {
+    useUploadMode(jpgs, 'dropped files');
+    return;
+  }
+
+  alert('Please drag a folder (not individual files) from Finder, or use "Browse for Folder".');
+});
+
+// ── Upload mode setup helper ──────────────────────────────────────────────────
+function useUploadMode(jpgs, sourceName) {
+  const folderName = (jpgs[0].webkitRelativePath || '').split('/')[0] || sourceName;
+  $('fcName').textContent = '📁 ' + (folderName || sourceName);
+  $('fcInfo').textContent = `${jpgs.length} JPEG image${jpgs.length!==1?'s':''} (upload mode — delete unavailable)`;
+  $('folderChosen').style.display = 'block';
+  $('runBtn').disabled = false;
+  $('runBtn').textContent = `▶  Check ${jpgs.length} Images`;
+  window._uploadFiles = jpgs;
+  window._uploadMode  = true;
+  folderPath  = '';
+  totalCount  = jpgs.length;
+}
+
+// ── Run ───────────────────────────────────────────────────────────────────────
+$('runBtn').addEventListener('click', () => {
+  if (window._uploadMode && window._uploadFiles) startUploadMode(window._uploadFiles);
+  else startFolderMode();
+});
+
+function setRunning(on) {
+  $('runBtn').style.display  = on ? 'none' : 'block';
+  $('stopBtn').style.display = on ? 'block' : 'none';
+  $('progWrap').style.display = 'block';
+  if (on) $('delBtn').style.display = 'none';
+}
+
+// ── Folder mode (server reads from disk) ──────────────────────────────────────
+function startFolderMode() {
+  results=[]; counts={total:0,pass:0,warn:0,fail:0}; activeIdx=null;
+  updateUI(); $('fileList').innerHTML='';
+  setRunning(true);
+  $('mainPanel').innerHTML='<div class="empty"><div class="empty-icon">⏳</div><p style="font-size:14px;font-weight:600;color:var(--fg)">Checking images…</p><p style="font-size:12px">Click any flagged file to see details</p></div>';
+
+  const skip = $('skipVision').checked ? 'true' : 'false';
+  es = new EventSource(`/api/check-folder?path=${encodeURIComponent(folderPath)}&skip_vision=${skip}`);
+  es.onmessage = ev => {
+    const m = JSON.parse(ev.data);
+    if (m.type === 'start') return;
+    if (m.type === 'done' || m.type === 'error') { es.close(); es=null; setRunning(false); onDone(); return; }
+    if (m.type === 'result') pushResult(m);
+  };
+  es.onerror = () => { es?.close(); es=null; setRunning(false); onDone(); };
+}
+
+// ── Upload mode (fallback: send files to server one by one) ──────────────────
+async function startUploadMode(files) {
+  results=[]; counts={total:0,pass:0,warn:0,fail:0}; activeIdx=null;
+  updateUI(); $('fileList').innerHTML='';
+  setRunning(true);
+  $('mainPanel').innerHTML='<div class="empty"><div class="empty-icon">⏳</div><p style="font-size:14px;font-weight:600;color:var(--fg)">Checking images…</p><p style="font-size:12px">Upload mode — no delete available</p></div>';
+  const skip = $('skipVision').checked ? 'true' : 'false';
+  for (let i=0; i<files.length; i++) {
+    if (window._uploadStopped) break;
+    const fd = new FormData();
+    fd.append('file', files[i]);
+    fd.append('skip_vision', skip);
+    try {
+      const r = await fetch('/api/check', {method:'POST', body:fd});
+      const m = await r.json();
+      m.type='result'; m.index=i; m.file=files[i].name;
+      m.original_path=''; // no path in upload mode — delete unavailable
+      pushResult(m);
+    } catch(e) {
+      pushResult({type:'result',index:i,file:files[i].name,original_path:'',overall:'fail',fail_count:1,warn_count:0,checks:[],error:String(e)});
+    }
+  }
+  setRunning(false); onDone();
+}
+window._uploadStopped = false;
+
+$('stopBtn').addEventListener('click', () => {
+  window._uploadStopped = true;
+  if (es) { es.close(); es=null; }
+  setRunning(false);
+  $('progText').textContent = `Stopped — ${counts.total} / ${totalCount}`;
+  onDone();
+});
+
+// ── Push result ────────────────────────────────────────────────────────────────
+function pushResult(m) {
+  results.push(m);
+  counts.total++;
+  counts[m.overall] = (counts[m.overall]||0)+1;
+  updateUI();
+  addToList(m, results.length-1);
+}
+
+function updateUI() {
+  $('cTotal').textContent = counts.total;
+  $('cPass').textContent  = counts.pass||0;
+  $('cWarn').textContent  = counts.warn||0;
+  $('cFail').textContent  = counts.fail||0;
+  const tot = totalCount||counts.total||1;
+  $('progFill').style.width = `${(counts.total/tot)*100}%`;
+  $('progText').textContent  = `${counts.total} / ${totalCount||'?'}`;
+}
+
+function onDone() {
+  window._uploadStopped = false;
+  const failed = results.filter(r=>r.overall==='fail'&&!r._deleted&&r.original_path);
+  $('failCount').textContent = failed.length;
+  if (failed.length>0) $('delBtn').style.display='block';
+  const issues = results.filter(r=>r.overall!=='pass').length;
+  $('listLabel').textContent = `Issues (${issues})`;
+}
+
+// ── File list ─────────────────────────────────────────────────────────────────
+function addToList(r, idx) {
+  if ($('failOnly').checked && r.overall==='pass') return;
+  const div = document.createElement('div');
+  div.className = 'file-item'; div.dataset.idx = idx;
+  div.innerHTML = `<span class="dot ${r.overall}"></span><span class="fi-name" title="${r.file}">${r.file}</span><span class="fi-tag ${r.overall}">${r.overall.toUpperCase()}</span>`;
+  div.addEventListener('click', () => {
+    activeIdx = idx;
+    document.querySelectorAll('.file-item').forEach(e=>e.classList.remove('active'));
+    div.classList.add('active');
+    showReport(results[idx]);
+  });
+  $('fileList').appendChild(div);
+}
+
+// ── Report ────────────────────────────────────────────────────────────────────
+const TECH = ['format','file_size','resolution','color_profile','exposure','noise','sharpness','jpeg_artifacts','chroma_aberration','saturation','watermark'];
+const VIS  = ['anatomy','text_in_image','ai_artifacts','skin_texture','background_quality','overall_commercial_quality','vision_summary'];
+
+function ci(s){ return s==='pass'?`<span style="color:var(--pass)">✓</span>`:s==='warn'?`<span style="color:var(--warn)">⚠</span>`:`<span style="color:var(--fail)">✗</span>`;}
+
+function renderChecks(checks, ids) {
+  const m = Object.fromEntries(checks.map(c=>[c.id,c]));
+  return ids.filter(id=>m[id]).map(id=>{
+    const c=m[id];
+    return `<div class="check-row ${c.status}"><span class="ci">${ci(c.status)}</span><span class="cn">${c.name}</span><span class="cm">${c.message||''}</span><span class="cv">${c.value||''}</span></div>`;
+  }).join('') || '<p style="color:var(--mut);font-size:13px;padding:6px 0">No data.</p>';
+}
+
+function showReport(r) {
+  $('mainPanel').innerHTML = `
+    <p class="rpt-name">${r.file||'—'}</p>
+    ${r.original_path ? `<p class="rpt-path">${r.original_path}</p>` : ''}
+    <span class="ob ${r.overall}">${(r.overall||'').toUpperCase()}</span>
+    <div class="rpt-stats">
+      <div>Fails: <b style="color:var(--fail)">${r.fail_count||0}</b></div>
+      <div>Warns: <b style="color:var(--warn)">${r.warn_count||0}</b></div>
+      ${r.duration_s?`<div>Time: <b>${r.duration_s}s</b></div>`:''}
+    </div>
+    ${r.error?`<div style="color:var(--fail);font-size:13px;margin:12px 0;padding:8px 12px;background:#f8514910;border-radius:6px">⚠ ${r.error}</div>`:''}
+    <div style="margin-top:18px">
+      <div class="sec"><div class="sec-t">⚙ Technical Checks</div>${renderChecks(r.checks||[], TECH)}</div>
+      <div class="sec"><div class="sec-t">🤖 AI Vision Checks</div>${renderChecks(r.checks||[], VIS)}</div>
+    </div>`;
+}
+
+// ── Delete ────────────────────────────────────────────────────────────────────
+$('delBtn').addEventListener('click', () => {
+  const n = results.filter(r=>r.overall==='fail'&&!r._deleted&&r.original_path).length;
+  $('dlgText').innerHTML = `This will <b>permanently delete ${n} FAIL image${n!==1?'s':''}</b> from your folder.<br>This action <b>cannot be undone</b>.`;
+  $('overlay').classList.add('show');
+});
+$('dlgCancel').addEventListener('click', ()=>$('overlay').classList.remove('show'));
+$('dlgConfirm').addEventListener('click', async () => {
+  $('overlay').classList.remove('show');
+  const paths = results.filter(r=>r.overall==='fail'&&!r._deleted&&r.original_path).map(r=>r.original_path);
+  $('delBtn').disabled=true; $('delBtn').textContent='Deleting…';
+  try {
+    const r  = await fetch('/api/delete-failed', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({paths})});
+    const d  = await r.json();
+    const del = new Set(d.deleted);
+    results.forEach(r=>{ if(del.has(r.original_path)) r._deleted=true; });
+    document.querySelectorAll('.file-item').forEach(el=>{ const r=results[+el.dataset.idx]; if(r?._deleted) el.remove(); });
+    counts.fail = results.filter(r=>r.overall==='fail'&&!r._deleted).length;
+    updateUI(); $('delBtn').style.display='none';
+    $('mainPanel').innerHTML=`<div class="empty"><div class="empty-icon">🗑️</div><p style="font-size:16px;font-weight:600;color:var(--pass)">Deleted ${d.deleted} image${d.deleted!==1?'s':''}</p>${d.errors?.length?`<p style="color:var(--fail);font-size:12px;margin-top:8px">${d.errors.length} could not be deleted</p>`:''}</div>`;
+  } catch(e) { $('delBtn').disabled=false; $('delBtn').textContent='Retry Delete'; alert('Delete error: '+e); }
+});
+
+// ── Clear + CSV ───────────────────────────────────────────────────────────────
+$('clearBtn').addEventListener('click', () => {
+  if(es){es.close();es=null;}
+  results=[]; counts={total:0,pass:0,warn:0,fail:0}; activeIdx=null; folderPath=''; totalCount=0;
+  window._uploadFiles=null; window._uploadMode=false; window._uploadStopped=false;
+  updateUI(); $('fileList').innerHTML=''; $('delBtn').style.display='none';
+  $('runBtn').disabled=true; $('runBtn').style.display='block'; $('runBtn').textContent='▶  Start Checking';
+  $('stopBtn').style.display='none'; $('progWrap').style.display='none';
+  $('listLabel').textContent='Issues (0)'; $('folderChosen').style.display='none';
+  $('mainPanel').innerHTML=`<div class="empty"><div class="empty-icon">📁</div><p style="font-size:16px;font-weight:600;color:var(--fg)">Select your image folder</p><p style="font-size:13px;line-height:1.8">Drop a folder from Finder onto the left panel<br>or click <b style="color:var(--acc)">Browse for Folder</b></p></div>`;
+});
+
+$('csvBtn').addEventListener('click', async () => {
+  if(!results.length){alert('No results yet.');return;}
+  const r=await fetch('/api/export-csv',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(results.filter(r=>!r._deleted))});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(await r.blob()); a.download='stocklint_results.csv'; a.click();
+});
+
+// ── Also accept drops anywhere on the page ────────────────────────────────────
+document.body.addEventListener('dragover', e => e.preventDefault());
+document.body.addEventListener('drop', e => {
+  if (e.target.closest('#dropZone')) return; // handled above
+  e.preventDefault();
+  dz.dispatchEvent(new DragEvent('drop', {dataTransfer: e.dataTransfer, bubbles:false}));
+});
+
+$('failOnly').addEventListener('change', () => {
+  $('fileList').innerHTML='';
+  results.filter(r=>!r._deleted).forEach((r,i)=>{ if(!$('failOnly').checked||r.overall!=='pass') addToList(r,i); });
+});
+</script>
+</body>
+</html>
