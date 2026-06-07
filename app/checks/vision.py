@@ -17,7 +17,7 @@ from PIL import Image
 
 load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
-MAX_DIM = 2200  # downscale longest side before sending (keep text legible enough to read)
+MAX_DIM = 4000  # downscale longest side before sending (keep text legible enough to read)
 
 _SYSTEM = """You are a strict Adobe Stock quality reviewer for AI-generated images.
 Adobe REJECTS images for these quality issues. Inspect carefully and report honestly.
@@ -49,8 +49,11 @@ Check ALL of these (include every one in the checks array):
    - Image must fill the frame edge-to-edge. pass if no border.
 
 3. id="anatomy" name="Anatomy"
-   - Malformed hands/fingers, distorted faces/eyes, extra limbs, wrong proportions → FAIL.
-   - No people/animals OR anatomy correct → pass.
+   - CRITICAL: Zoom in and examine EVERY person, even small figures in the background.
+   - Look closely at faces, eyes, and hands.
+   - Malformed hands/fingers, distorted/melted/smudged faces, asymmetrical eyes, extra limbs, or wrong proportions → FAIL.
+   - Even if the people are small in a wide landscape shot, if their faces are a deformed mess, it is a FAIL.
+   - No people/animals OR anatomy is flawless → pass.
 
 4. id="ai_artifacts" name="AI Artifacts"
    - Unnatural repeating/tiling patterns, halos around objects, melted/merged shapes,
@@ -89,15 +92,19 @@ def run_all(path: Path) -> list[dict]:
     from google import genai
     from google.genai import types
 
+    import random
+    keys_to_try = list(api_keys)
+    random.shuffle(keys_to_try)
+
     last_err = None
-    for key in api_keys:
+    for key in keys_to_try:
         try:
             client = genai.Client(api_key=key)
             resp = client.models.generate_content(
                 model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
                 contents=[
                     types.Part.from_bytes(data=img_bytes, mime_type=mime),
-                    "Review this image for Adobe Stock quality rejection issues.",
+                    "Review this image for Adobe Stock quality rejection issues. Pay extreme attention to the faces and hands of all people, even tiny figures in the background.",
                 ],
                 config=types.GenerateContentConfig(
                     system_instruction=_SYSTEM,

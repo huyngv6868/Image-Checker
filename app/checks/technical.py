@@ -325,8 +325,10 @@ def check_text_legibility(img: Image.Image) -> dict:
     clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8)).apply(arr)
     buf = io.BytesIO(); Image.fromarray(clahe).save(buf, "PNG")
     try:
+        env = os.environ.copy()
+        env["OMP_THREAD_LIMIT"] = "1"
         proc = subprocess.run(["tesseract", "stdin", "stdout", "--psm", "11", "tsv"],
-                              input=buf.getvalue(), capture_output=True, timeout=120)
+                              input=buf.getvalue(), capture_output=True, timeout=120, env=env)
         out = proc.stdout.decode("utf-8", "ignore")
     except Exception as e:  # noqa: BLE001
         return _result("text_legibility", "Text Legibility", "warn", "OCR error", "real words", str(e))

@@ -90,7 +90,7 @@ body{font:14px/1.5 system-ui,sans-serif;background:var(--bg);color:var(--fg);hei
 /* === Bottom actions === */
 .btm{padding:12px 14px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:6px}
 .btn-del{background:#6b1212;border:1px solid #f8514960;color:#ffb3b3;border-radius:8px;
-         padding:9px;font:inherit;font-weight:600;cursor:pointer;display:none;font-size:13px;transition:.15s}
+         padding:9px;font:inherit;font-weight:600;cursor:pointer;font-size:13px;transition:.15s}
 .btn-del:hover:not(:disabled){background:#8a1818}
 .btn-del:disabled{opacity:.5;cursor:not-allowed}
 .btn-row{display:flex;gap:6px}
@@ -130,6 +130,12 @@ body{font:14px/1.5 system-ui,sans-serif;background:var(--bg);color:var(--fg);hei
 .dlg-btns{display:flex;gap:10px;justify-content:flex-end}
 .btn-cc{background:var(--card2);border:1px solid var(--line);color:var(--fg);border-radius:7px;padding:9px 18px;font:inherit;cursor:pointer}
 .btn-cdel{background:#b3403a;color:#fff;border:0;border-radius:7px;padding:9px 18px;font:inherit;font-weight:600;cursor:pointer}
+
+/* === Toast === */
+.toast-container { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; gap: 10px; z-index: 9999; pointer-events: none; }
+.toast { background: var(--card2); border: 1px solid var(--line); color: var(--fg); padding: 12px 20px; border-radius: 8px; font-size: 13px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); opacity: 0; animation: fadein 0.3s forwards, fadeout 0.3s 3s forwards; }
+@keyframes fadein { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes fadeout { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(10px); } }
 </style>
 </head>
 <body>
@@ -210,7 +216,7 @@ body{font:14px/1.5 system-ui,sans-serif;background:var(--bg);color:var(--fg);hei
 
   <!-- Bottom actions -->
   <div class="btm">
-    <button class="btn-del" id="delBtn">🗑&nbsp; Delete <span id="failCount">0</span> FAIL Images</button>
+    <button class="btn-del" id="delBtn" disabled>🗑&nbsp; Delete <span id="failCount">0</span> FAIL Images</button>
     <div class="btn-row">
       <button class="btn-sm" id="clearBtn">Clear</button>
       <button class="btn-sm" id="csvBtn">Export CSV</button>
@@ -244,6 +250,13 @@ body{font:14px/1.5 system-ui,sans-serif;background:var(--bg);color:var(--fg);hei
 <script>
 const $ = id => document.getElementById(id);
 
+function showToast(msg) {
+  let tc = document.getElementById('toast-container');
+  if (!tc) { tc = document.createElement('div'); tc.id = 'toast-container'; tc.className = 'toast-container'; document.body.appendChild(tc); }
+  const t = document.createElement('div'); t.className = 'toast'; t.textContent = msg;
+  tc.appendChild(t); setTimeout(() => t.remove(), 3500);
+}
+
 let folderPath = '';
 let totalCount = 0;
 let results    = [];
@@ -272,9 +285,9 @@ async function scanPath(path) {
   try {
     const r = await fetch('/api/scan-folder', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({path})});
     const d = await r.json();
-    if (d.error) { alert('Error: ' + d.error); return; }
+    if (d.error) { showToast('Error: ' + d.error); return; }
     showFolderChosen(d.folder, d.count);
-  } catch(e) { alert('Could not scan folder: ' + e); }
+  } catch(e) { showToast('Could not scan folder: ' + e); }
 }
 
 // ── Browse button → native OS picker ─────────────────────────────────────────
@@ -284,9 +297,9 @@ $('browseBtn').addEventListener('click', async () => {
   try {
     const r = await fetch('/api/pick-folder');
     const d = await r.json();
-    if (d.error) { alert('Error: ' + d.error); return; }
+    if (d.error) { showToast('Error: ' + d.error); return; }
     if (!d.cancelled && d.path) await scanPath(d.path);
-  } catch(e) { alert('Error: ' + e); }
+  } catch(e) { showToast('Error: ' + e); }
   finally {
     $('browseBtn').innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg> Browse for Folder…`;
     $('browseBtn').disabled = false;
@@ -336,7 +349,7 @@ dz.addEventListener('drop', async e => {
     return;
   }
 
-  alert('Please drag a folder (not individual files) from Finder, or use "Browse for Folder".');
+  showToast('Please drag a folder (not individual files) from Finder, or use "Browse for Folder".');
 });
 
 // ── Upload mode setup helper ──────────────────────────────────────────────────
@@ -363,7 +376,7 @@ function setRunning(on) {
   $('runBtn').style.display  = on ? 'none' : 'block';
   $('stopBtn').style.display = on ? 'block' : 'none';
   $('progWrap').style.display = 'block';
-  if (on) $('delBtn').style.display = 'none';
+  if (on) $('delBtn').disabled = true;
 }
 
 // ── Folder mode (server reads from disk) ──────────────────────────────────────
@@ -391,21 +404,28 @@ async function startUploadMode(files) {
   setRunning(true);
   $('mainPanel').innerHTML='<div class="empty"><div class="empty-icon">⏳</div><p style="font-size:14px;font-weight:600;color:var(--fg)">Checking images…</p><p style="font-size:12px">Upload mode — no delete available</p></div>';
   const skip = $('skipVision').checked ? 'true' : 'false';
-  for (let i=0; i<files.length; i++) {
-    if (window._uploadStopped) break;
-    const fd = new FormData();
-    fd.append('file', files[i]);
-    fd.append('skip_vision', skip);
-    try {
-      const r = await fetch('/api/check', {method:'POST', body:fd});
-      const m = await r.json();
-      m.type='result'; m.index=i; m.file=files[i].name;
-      m.original_path=''; // no path in upload mode — delete unavailable
-      pushResult(m);
-    } catch(e) {
-      pushResult({type:'result',index:i,file:files[i].name,original_path:'',overall:'fail',fail_count:1,warn_count:0,checks:[],error:String(e)});
+  
+  let i = 0;
+  const workers = Array.from({length: 8}).map(async () => {
+    while (i < files.length) {
+      if (window._uploadStopped) break;
+      const cur = i++;
+      const fd = new FormData();
+      fd.append('file', files[cur]);
+      fd.append('skip_vision', skip);
+      try {
+        const r = await fetch('/api/check', {method:'POST', body:fd});
+        const m = await r.json();
+        m.type='result'; m.index=cur; m.file=files[cur].name;
+        m.original_path=files[cur].path || ''; // Use path if available (e.g. VSCode/Electron)
+        pushResult(m);
+      } catch(e) {
+        pushResult({type:'result',index:cur,file:files[cur].name,original_path:'',overall:'fail',fail_count:1,warn_count:0,checks:[],error:String(e)});
+      }
     }
-  }
+  });
+  
+  await Promise.all(workers);
   setRunning(false); onDone();
 }
 window._uploadStopped = false;
@@ -439,9 +459,22 @@ function updateUI() {
 
 function onDone() {
   window._uploadStopped = false;
-  const failed = results.filter(r=>r.overall==='fail'&&!r._deleted&&r.original_path);
-  $('failCount').textContent = failed.length;
-  if (failed.length>0) $('delBtn').style.display='block';
+  const failedAll = results.filter(r=>r.overall==='fail'&&!r._deleted);
+  const failedWithPath = failedAll.filter(r=>r.original_path);
+  
+  $('failCount').textContent = failedAll.length;
+  if (failedAll.length > 0) {
+    if (failedWithPath.length === 0) {
+      $('delBtn').disabled = true;
+      $('delBtn').title = 'Cannot delete files in upload mode. Please use Browse for Folder.';
+    } else {
+      $('delBtn').disabled = false;
+      $('delBtn').title = '';
+    }
+  } else {
+    $('delBtn').disabled = true;
+    $('delBtn').title = '';
+  }
   const issues = results.filter(r=>r.overall!=='pass').length;
   $('listLabel').textContent = `Issues (${issues})`;
 }
@@ -506,13 +539,21 @@ $('dlgConfirm').addEventListener('click', async () => {
   try {
     const r  = await fetch('/api/delete-failed', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({paths})});
     const d  = await r.json();
-    const del = new Set(d.deleted);
+    const del = new Set(d.deleted_paths || []);
     results.forEach(r=>{ if(del.has(r.original_path)) r._deleted=true; });
     document.querySelectorAll('.file-item').forEach(el=>{ const r=results[+el.dataset.idx]; if(r?._deleted) el.remove(); });
-    counts.fail = results.filter(r=>r.overall==='fail'&&!r._deleted).length;
-    updateUI(); $('delBtn').style.display='none';
-    $('mainPanel').innerHTML=`<div class="empty"><div class="empty-icon">🗑️</div><p style="font-size:16px;font-weight:600;color:var(--pass)">Deleted ${d.deleted} image${d.deleted!==1?'s':''}</p>${d.errors?.length?`<p style="color:var(--fail);font-size:12px;margin-top:8px">${d.errors.length} could not be deleted</p>`:''}</div>`;
-  } catch(e) { $('delBtn').disabled=false; $('delBtn').textContent='Retry Delete'; alert('Delete error: '+e); }
+    
+    // Update count after deletion
+    const remaining = results.filter(r=>r.overall==='fail'&&!r._deleted).length;
+    counts.fail = remaining;
+    counts.warn = results.filter(r=>r.overall==='warn'&&!r._deleted).length;
+    
+    updateUI(); 
+    if (remaining === 0) $('delBtn').disabled=true;
+    else $('failCount').textContent = remaining;
+    
+    $('mainPanel').innerHTML=`<div class="empty"><div class="empty-icon">🗑️</div><p style="font-size:16px;font-weight:600;color:var(--pass)">Deleted ${d.deleted_count} image${d.deleted_count!==1?'s':''}</p>${d.errors?.length?`<p style="color:var(--fail);font-size:12px;margin-top:8px">${d.errors.length} could not be deleted</p>`:''}</div>`;
+  } catch(e) { $('delBtn').disabled=false; $('delBtn').textContent='Retry Delete'; showToast('Delete error: '+e); }
 });
 
 // ── Clear + CSV ───────────────────────────────────────────────────────────────
@@ -520,7 +561,7 @@ $('clearBtn').addEventListener('click', () => {
   if(es){es.close();es=null;}
   results=[]; counts={total:0,pass:0,warn:0,fail:0}; activeIdx=null; folderPath=''; totalCount=0;
   window._uploadFiles=null; window._uploadMode=false; window._uploadStopped=false;
-  updateUI(); $('fileList').innerHTML=''; $('delBtn').style.display='none';
+  updateUI(); $('fileList').innerHTML=''; $('delBtn').disabled=true; $('failCount').textContent='0';
   $('runBtn').disabled=true; $('runBtn').style.display='block'; $('runBtn').textContent='▶  Start Checking';
   $('stopBtn').style.display='none'; $('progWrap').style.display='none';
   $('listLabel').textContent='Issues (0)'; $('folderChosen').style.display='none';
@@ -528,7 +569,7 @@ $('clearBtn').addEventListener('click', () => {
 });
 
 $('csvBtn').addEventListener('click', async () => {
-  if(!results.length){alert('No results yet.');return;}
+  if(!results.length){showToast('No results yet.');return;}
   const r=await fetch('/api/export-csv',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(results.filter(r=>!r._deleted))});
   const a=document.createElement('a'); a.href=URL.createObjectURL(await r.blob()); a.download='stocklint_results.csv'; a.click();
 });

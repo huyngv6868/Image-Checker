@@ -82,22 +82,32 @@ async def check_folder(path: str, skip_vision: str = "false"):
 
     async def generate():
         yield f'data: {json.dumps({"type":"start","total":len(files)})}\n\n'
-        for i, img_path in enumerate(files):
-            try:
-                report = await asyncio.to_thread(run, img_path, skip_vision=skip)
-                report["original_path"] = str(img_path)
-                report["file"]  = img_path.name
-                report["index"] = i
-                report["type"]  = "result"
-            except Exception as e:  # noqa: BLE001
-                report = {
-                    "type": "result", "original_path": str(img_path),
-                    "file": img_path.name, "index": i,
-                    "overall": "fail", "fail_count": 1, "warn_count": 0,
-                    "checks": [], "error": str(e),
-                }
+        
+        sem = asyncio.Semaphore(8)
+        
+        async def process_one(i: int, img_path: Path):
+            async with sem:
+                try:
+                    report = await asyncio.to_thread(run, img_path, skip_vision=skip)
+                    report["original_path"] = str(img_path)
+                    report["file"]  = img_path.name
+                    report["index"] = i
+                    report["type"]  = "result"
+                    return report
+                except Exception as e:  # noqa: BLE001
+                    return {
+                        "type": "result", "original_path": str(img_path),
+                        "file": img_path.name, "index": i,
+                        "overall": "fail", "fail_count": 1, "warn_count": 0,
+                        "checks": [], "error": str(e),
+                    }
+                    
+        tasks = [asyncio.create_task(process_one(i, p)) for i, p in enumerate(files)]
+        for fut in asyncio.as_completed(tasks):
+            report = await fut
             yield f"data: {json.dumps(report)}\n\n"
             await asyncio.sleep(0)
+            
         yield f'data: {json.dumps({"type":"done","total":len(files)})}\n\n'
 
     return StreamingResponse(
@@ -138,7 +148,7 @@ def delete_failed(body: dict):
                 errors.append(f"Not found: {p}")
         except Exception as e:  # noqa: BLE001
             errors.append(f"{p}: {e}")
-    return {"deleted": len(deleted), "errors": errors}
+    return {"deleted_count": len(deleted), "deleted_paths": deleted, "errors": errors}
 
 
 # ── Export CSV ────────────────────────────────────────────────────────────────
