@@ -22,16 +22,12 @@ def run(path: Path, *, skip_vision: bool = False) -> dict:
     t0 = time.time()
 
     tech_checks = technical.run_all(path)
-    vis_checks = vision.run_all(path) if not skip_vision else [{
-        "id": "vision_skipped",
-        "name": "AI Vision Check",
-        "status": "warn",
-        "value": "Skipped",
-        "threshold": "—",
-        "message": "Vision check skipped (no API key or disabled).",
-    }]
 
-    all_checks = tech_checks + vis_checks
+    vision_checks: list[dict] = []
+    if not skip_vision:
+        vision_checks = vision.run_all(path)
+
+    all_checks = tech_checks + vision_checks
     overall = _overall(all_checks)
 
     fails = [c for c in all_checks if c["status"] == "fail"]

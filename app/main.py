@@ -6,7 +6,6 @@ import csv
 import subprocess
 import io
 import json
-import os
 import shutil
 import tempfile
 import uuid
@@ -14,7 +13,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse, FileResponse
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
@@ -35,8 +34,8 @@ def index():
 
 @app.get("/api/status")
 def status():
-    keys = [k.strip() for k in os.getenv("GEMINI_API_KEYS", "").split(",") if k.strip()]
-    return {"keys": len(keys), "model": os.getenv("GEMINI_MODEL", "gemini-2.5-flash")}
+    from .checks import vision
+    return {"mode": "local", "model": vision.MODEL_ID}
 
 
 # ── Native folder picker (macOS AppleScript) ─────────────────────────────────
@@ -56,6 +55,25 @@ def pick_folder():
         return {"cancelled": False, "path": path}
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"error": str(e)}, status_code=500)
+
+
+# ── Serve image file ──────────────────────────────────────────────────────────
+@app.get("/api/image")
+def get_image(path: str):
+    p = Path(path)
+    if p.is_file():
+        return FileResponse(p)
+    return Response(status_code=404)
+
+
+# ── Reveal in Finder ──────────────────────────────────────────────────────────
+@app.post("/api/reveal")
+def reveal_in_finder(body: dict):
+    path = body.get("path")
+    if path and Path(path).exists():
+        subprocess.run(["open", "-R", path], check=False)
+    return {"status": "ok"}
+
 
 
 # ── Scan folder ───────────────────────────────────────────────────────────────
@@ -127,7 +145,6 @@ async def check_image(file: UploadFile = File(...), skip_vision: str = Form("fal
         skip   = skip_vision.lower() in ("true", "1", "yes")
         report = await asyncio.to_thread(run, tmp, skip_vision=skip)
         report["original_name"] = file.filename
-        report["original_path"] = file.filename
         return JSONResponse(report)
     finally:
         tmp.unlink(missing_ok=True)
