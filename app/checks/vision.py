@@ -25,12 +25,8 @@ MODEL_ID   = os.getenv("STOCKLINT_VLM_MODEL", "nvidia/nemotron-nano-12b-v2-vl")
 MAX_DIM    = int(os.getenv("STOCKLINT_VLM_MAX_DIM", "2048"))
 MAX_TOKENS = int(os.getenv("STOCKLINT_VLM_MAX_TOKENS", "700"))
 
-# Vision models queried per image. An image fails a check if ANY model fails it.
-# Single model by default — gemma-4-31b hallucinated hand defects, so it was dropped.
-# Override via STOCKLINT_VLM_MODELS (comma-separated) to ensemble again.
-ENSEMBLE_MODELS = [m.strip() for m in os.getenv(
-    "STOCKLINT_VLM_MODELS", MODEL_ID,
-).split(",") if m.strip()]
+# Fallback models queried per image.
+# We maintain a pool of fallback API clients across providers.
 
 # Deterministic small-face gate. The VLM cannot reliably eyeball whether a face is
 # 0.2% or 5% of the frame, so a measured detector handles "humans too small/distant
@@ -229,21 +225,42 @@ def _result(id: str, name: str, status: str, value, message: str) -> dict:
 def _unavailable(msg: str) -> list[dict]:
     return [_result("vision_unavailable", "AI Vision", "warn", "unavailable", msg)]
 
-# ── API Client Singleton ──────────────────────────────────────────────────────
-_client = None
+# ── Fallback Clients ──────────────────────────────────────────────────────────
+_fallback_clients = None
 
-def _get_client() -> OpenAI | None:
-    global _client
-    if _client is not None:
-        return _client
-    api_key = os.getenv("NVIDIA_API_KEY")
-    if not api_key:
-        return None
-    _client = OpenAI(
-        base_url="https://integrate.api.nvidia.com/v1",
-        api_key=api_key
-    )
-    return _client
+def _get_fallback_clients() -> list[tuple[OpenAI, str]]:
+    global _fallback_clients
+    if _fallback_clients is not None:
+        return _fallback_clients
+        
+    clients = []
+    
+    # 1. NVIDIA NIM (Free Tier)
+    # Check NVIDIA_API_KEYS (comma separated) or fallback to NVIDIA_API_KEY
+    nvidia_keys_env = os.getenv("NVIDIA_API_KEYS") or os.getenv("NVIDIA_API_KEY", "")
+    nvidia_keys = [k.strip() for k in nvidia_keys_env.split(",") if k.strip()]
+    for key in nvidia_keys:
+        client = OpenAI(base_url="https://integrate.api.nvidia.com/v1", api_key=key)
+        clients.append((client, MODEL_ID))
+        
+    # 2. OpenRouter
+    or_keys_env = os.getenv("OPENROUTER_API_KEYS", "")
+    or_keys = [k.strip() for k in or_keys_env.split(",") if k.strip()]
+    or_model = os.getenv("OPENROUTER_MODEL", "google/gemini-1.5-flash")
+    for key in or_keys:
+        client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=key)
+        clients.append((client, or_model))
+        
+    # 3. Gemini
+    gemini_keys_env = os.getenv("GEMINI_API_KEYS", "")
+    gemini_keys = [k.strip() for k in gemini_keys_env.split(",") if k.strip()]
+    gemini_model = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+    for key in gemini_keys:
+        client = OpenAI(base_url="https://generativelanguage.googleapis.com/v1beta/openai/", api_key=key)
+        clients.append((client, gemini_model))
+        
+    _fallback_clients = clients
+    return _fallback_clients
 
 # ── run all ───────────────────────────────────────────────────────────────────
 
@@ -269,7 +286,7 @@ def _query_model(client: OpenAI, model: str, b64_img: str) -> dict | None:
         )
         text = response.choices[0].message.content
     except Exception as e:
-        print(f"ENSEMBLE model {model} failed: {type(e).__name__}: {e}")
+        print(f"Vision model {model} on {client.base_url} failed: {type(e).__name__}: {e}")
         return None
 
     print(f"RAW VLM OUTPUT [{model}]:\n{text}\n{'='*40}")
@@ -280,25 +297,26 @@ def _query_model(client: OpenAI, model: str, b64_img: str) -> dict | None:
 
 
 def run_all(path: Path) -> list[dict]:
-    client = _get_client()
-    if not client:
-        return _unavailable("NVIDIA_API_KEY is not set in environment variables. Add it to .env.")
+    clients = _get_fallback_clients()
+    if not clients:
+        return _unavailable("No API keys found for NVIDIA, OpenRouter, or Gemini. Add them to .env.")
 
     try:
         b64_img = _prep_image_b64(path)
     except Exception as e:
         return _unavailable(f"Could not prepare image: {type(e).__name__}: {e}")
 
-    # Query each ensemble model. fail on any check wins (union of detectors).
+    # Query using fallback chain. First successful response wins.
     datas: list[dict] = []
-    for model in ENSEMBLE_MODELS:
-        time.sleep(1.5)  # stay under 40 RPM
+    for client, model in clients:
+        time.sleep(1.5)  # stay under rate limits when falling back
         d = _query_model(client, model, b64_img)
         if d:
             datas.append(d)
+            break
 
     if not datas:
-        return _unavailable("All vision models failed or returned unparseable responses.")
+        return _unavailable("All fallback vision providers failed or returned unparseable responses.")
 
     # Deterministic small-face gate (overrides the anatomy verdict).
     face_frac = _largest_face_fraction(path) if FACE_MIN_FRAC > 0 else None
