@@ -15,10 +15,31 @@ from pathlib import Path
 from openai import OpenAI
 from PIL import Image, ImageOps
 
+try:
+    import cv2
+except Exception:  # pragma: no cover - cv2 ships with the project
+    cv2 = None
+
 # ── config (override via env) ────────────────────────────────────────────────
-MODEL_ID   = os.getenv("STOCKLINT_VLM_MODEL", "meta/llama-3.2-11b-vision-instruct")
+MODEL_ID   = os.getenv("STOCKLINT_VLM_MODEL", "nvidia/nemotron-nano-12b-v2-vl")
 MAX_DIM    = int(os.getenv("STOCKLINT_VLM_MAX_DIM", "2048"))
 MAX_TOKENS = int(os.getenv("STOCKLINT_VLM_MAX_TOKENS", "700"))
+
+# Vision models queried per image. An image fails a check if ANY model fails it.
+# Single model by default — gemma-4-31b hallucinated hand defects, so it was dropped.
+# Override via STOCKLINT_VLM_MODELS (comma-separated) to ensemble again.
+ENSEMBLE_MODELS = [m.strip() for m in os.getenv(
+    "STOCKLINT_VLM_MODELS", MODEL_ID,
+).split(",") if m.strip()]
+
+# Deterministic small-face gate. The VLM cannot reliably eyeball whether a face is
+# 0.2% or 5% of the frame, so a measured detector handles "humans too small/distant
+# for features to be trustworthy". If a face is detected but occupies less than this
+# fraction of the frame → force anatomy=fail. Calibrated: bad samples ≤0.20%, good
+# samples ≥0.62%, so 0.5% cleanly separates them. Set to 0 to disable.
+FACE_MIN_FRAC = float(os.getenv("STOCKLINT_FACE_MIN_FRAC", "0.005"))
+_YUNET_PATH   = Path(__file__).resolve().parent.parent / "assets" / "face_detection_yunet_2023mar.onnx"
+_FACE_DET_W   = 1024  # long side the detector runs at
 
 _CHECK_META: dict[str, str] = {
     "text_in_image": "Text / Lettering",
@@ -58,6 +79,8 @@ How to judge each check:
    faces, and limbs. If there are structural inconsistencies (e.g., incorrect number of
    fingers, unaligned facial features, structural irregularities) → status="fail".
    No people/animals OR anatomy is clearly correct → status="pass".
+   When a face is clearly visible and close, scrutinize the eyes and teeth for melted,
+   fused, or asymmetric features. Do NOT fail merely because a subject is small or distant.
 
 3. ai_artifacts
    Check for unnatural visual blending, impossible geometry, irregular repeating
@@ -83,6 +106,38 @@ def _prep_image_b64(path: Path) -> str:
     buf = io.BytesIO()
     img.save(buf, "JPEG", quality=92)
     return base64.b64encode(buf.getvalue()).decode('utf-8')
+
+
+# ── deterministic small-face gate ──────────────────────────────────────────────
+_face_det = None
+
+def _largest_face_fraction(path: Path) -> float | None:
+    """Largest detected face's bbox area as a fraction of the frame.
+
+    0.0 = no face detected; None = detection unavailable (cv2/model missing or
+    read error). YuNet DNN — accurate on small faces, few false positives.
+    """
+    global _face_det
+    if cv2 is None or not _YUNET_PATH.exists():
+        return None
+    try:
+        img = cv2.imread(str(path))
+        if img is None:
+            return None
+        h, w = img.shape[:2]
+        scale = _FACE_DET_W / max(h, w)
+        rw, rh = max(1, int(w * scale)), max(1, int(h * scale))
+        rimg = cv2.resize(img, (rw, rh))
+        if _face_det is None:
+            _face_det = cv2.FaceDetectorYN.create(str(_YUNET_PATH), "", (rw, rh), 0.7, 0.3, 5000)
+        _face_det.setInputSize((rw, rh))
+        _, faces = _face_det.detect(rimg)
+        if faces is None or len(faces) == 0:
+            return 0.0
+        frame = rw * rh
+        return max((f[2] * f[3]) / frame for f in faces)
+    except Exception:
+        return None
 
 
 def _parse_json(text: str) -> dict | None:
@@ -192,19 +247,11 @@ def _get_client() -> OpenAI | None:
 
 # ── run all ───────────────────────────────────────────────────────────────────
 
-def run_all(path: Path) -> list[dict]:
-    client = _get_client()
-    if not client:
-        return _unavailable("NVIDIA_API_KEY is not set in environment variables. Add it to .env.")
-
-    # Prevent hitting 40 RPM rate limit (1.5s delay guarantees <40 RPM)
-    time.sleep(1.5)
-
+def _query_model(client: OpenAI, model: str, b64_img: str) -> dict | None:
+    """Sends the image to one model; returns parsed {checks, summary} or None."""
     try:
-        b64_img = _prep_image_b64(path)
-        
         response = client.chat.completions.create(
-            model=MODEL_ID,
+            model=model,
             messages=[
                 {
                     "role": "user",
@@ -221,28 +268,79 @@ def run_all(path: Path) -> list[dict]:
             temperature=0.0
         )
         text = response.choices[0].message.content
-        
     except Exception as e:
-        return _unavailable(f"Vision inference failed via NVIDIA API: {type(e).__name__}: {e}")
+        print(f"ENSEMBLE model {model} failed: {type(e).__name__}: {e}")
+        return None
 
-    print(f"RAW VLM OUTPUT:\n{text}\n{'='*40}")
+    print(f"RAW VLM OUTPUT [{model}]:\n{text}\n{'='*40}")
     data = _parse_json(text)
     if not data or "checks" not in data:
-        return _unavailable("Vision model returned an unparseable response.")
+        return None
+    return data
 
-    by_id = {c.get("id"): c for c in data.get("checks", []) if isinstance(c, dict)}
+
+def run_all(path: Path) -> list[dict]:
+    client = _get_client()
+    if not client:
+        return _unavailable("NVIDIA_API_KEY is not set in environment variables. Add it to .env.")
+
+    try:
+        b64_img = _prep_image_b64(path)
+    except Exception as e:
+        return _unavailable(f"Could not prepare image: {type(e).__name__}: {e}")
+
+    # Query each ensemble model. fail on any check wins (union of detectors).
+    datas: list[dict] = []
+    for model in ENSEMBLE_MODELS:
+        time.sleep(1.5)  # stay under 40 RPM
+        d = _query_model(client, model, b64_img)
+        if d:
+            datas.append(d)
+
+    if not datas:
+        return _unavailable("All vision models failed or returned unparseable responses.")
+
+    # Deterministic small-face gate (overrides the anatomy verdict).
+    face_frac = _largest_face_fraction(path) if FACE_MIN_FRAC > 0 else None
+    gate_fail = face_frac is not None and 0.0 < face_frac < FACE_MIN_FRAC
+
+    summary = next((d.get("summary", "") for d in datas if d.get("summary")), "")
     results: list[dict] = []
     for cid, name in _CHECK_META.items():
-        c = by_id.get(cid)
-        if not c:
-            results.append(_result(cid, name, "warn", "—", "Model did not report this check."))
+        # collect this check from every model that reported it
+        votes: list[tuple[str, str, str]] = []  # (status, value, message)
+        for d in datas:
+            c = next((x for x in d.get("checks", [])
+                      if isinstance(x, dict) and x.get("id") == cid), None)
+            if not c:
+                continue
+            status = _norm_status(c.get("status", ""))
+            value = c.get("value", "—")
+            message = c.get("message", "") or summary
+            if cid == "text_in_image":
+                status, note = _judge_text(status, str(value))
+                if note:
+                    message = note
+            votes.append((status, value, message))
+
+        # anatomy: deterministic gate overrides the VLM when faces are too small
+        if cid == "anatomy" and gate_fail:
+            results.append(_result(cid, name, "fail",
+                f"faces too small ({face_frac*100:.2f}% of frame)",
+                f"Human face(s) occupy only {face_frac*100:.2f}% of the image "
+                f"(< {FACE_MIN_FRAC*100:.1f}% threshold) — subjects too small/distant, "
+                f"facial features cannot be verified and are likely distorted."))
             continue
-        status = _norm_status(c.get("status", ""))
-        value = c.get("value", "—")
-        message = c.get("message", "") or data.get("summary", "")
-        if cid == "text_in_image":
-            status, note = _judge_text(status, str(value))
-            if note:
-                message = note
-        results.append(_result(cid, name, status, value, message))
+
+        if not votes:
+            results.append(_result(cid, name, "warn", "—", "No model reported this check."))
+            continue
+
+        # union rule: any fail -> fail; report the failing model's value/message
+        fail = next((v for v in votes if v[0] == "fail"), None)
+        if fail:
+            results.append(_result(cid, name, "fail", fail[1], fail[2]))
+        else:
+            status, value, message = votes[0]
+            results.append(_result(cid, name, status, value, message))
     return results
