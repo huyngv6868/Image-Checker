@@ -240,7 +240,7 @@ def _get_fallback_clients() -> list[tuple[OpenAI, str]]:
     nvidia_keys_env = os.getenv("NVIDIA_API_KEYS") or os.getenv("NVIDIA_API_KEY", "")
     nvidia_keys = [k.strip() for k in nvidia_keys_env.split(",") if k.strip()]
     for key in nvidia_keys:
-        client = OpenAI(base_url="https://integrate.api.nvidia.com/v1", api_key=key)
+        client = OpenAI(base_url="https://integrate.api.nvidia.com/v1", api_key=key, timeout=30.0)
         clients.append((client, MODEL_ID))
         
     # 2. OpenRouter
@@ -248,7 +248,7 @@ def _get_fallback_clients() -> list[tuple[OpenAI, str]]:
     or_keys = [k.strip() for k in or_keys_env.split(",") if k.strip()]
     or_model = os.getenv("OPENROUTER_MODEL", "google/gemini-1.5-flash")
     for key in or_keys:
-        client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=key)
+        client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=key, timeout=30.0)
         clients.append((client, or_model))
         
     # 3. Gemini
@@ -256,7 +256,7 @@ def _get_fallback_clients() -> list[tuple[OpenAI, str]]:
     gemini_keys = [k.strip() for k in gemini_keys_env.split(",") if k.strip()]
     gemini_model = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
     for key in gemini_keys:
-        client = OpenAI(base_url="https://generativelanguage.googleapis.com/v1beta/openai/", api_key=key)
+        client = OpenAI(base_url="https://generativelanguage.googleapis.com/v1beta/openai/", api_key=key, timeout=30.0)
         clients.append((client, gemini_model))
         
     _fallback_clients = clients
@@ -308,8 +308,9 @@ def run_all(path: Path) -> list[dict]:
 
     # Query using fallback chain. First successful response wins.
     datas: list[dict] = []
-    for client, model in clients:
-        time.sleep(1.5)  # stay under rate limits when falling back
+    for i, (client, model) in enumerate(clients):
+        if i > 0:
+            time.sleep(1.5)  # stay under rate limits when falling back
         d = _query_model(client, model, b64_img)
         if d:
             datas.append(d)
