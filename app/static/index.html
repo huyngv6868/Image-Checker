@@ -564,7 +564,7 @@ async function deleteSingleFile(path, btn) {
     return;
   }
   if (!confirm('Permanently delete this image?')) return;
-  const oldText = btn.textContent;
+  const oldText = btn.innerHTML;
   btn.textContent = 'Deleting...';
   btn.disabled = true;
   try {
@@ -613,7 +613,7 @@ $('dlgCancel').addEventListener('click', ()=>$('overlay').classList.remove('show
 $('dlgConfirm').addEventListener('click', async () => {
   $('overlay').classList.remove('show');
   const paths = results.filter(r=>r.overall==='fail'&&!r._deleted&&r.original_path).map(r=>r.original_path);
-  $('delBtn').disabled=true; $('delBtn').textContent='Deleting…';
+  $('delBtn').disabled=true; $('delBtn').innerHTML='🗑&nbsp; Deleting…';
   try {
     const r  = await fetch('/api/delete-failed', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({paths})});
     const d  = await r.json();
@@ -627,11 +627,15 @@ $('dlgConfirm').addEventListener('click', async () => {
     counts.warn = results.filter(r=>r.overall==='warn'&&!r._deleted).length;
     
     updateUI(); 
-    if (remaining === 0) $('delBtn').disabled=true;
-    else $('failCount').textContent = remaining;
+    $('delBtn').disabled = (remaining === 0);
+    $('delBtn').innerHTML = `🗑&nbsp; Delete <span id="failCount">${remaining}</span> FAIL Images`;
     
     $('mainPanel').innerHTML=`<div class="empty"><div class="empty-icon">🗑️</div><p style="font-size:16px;font-weight:600;color:var(--pass)">Deleted ${d.deleted_count} image${d.deleted_count!==1?'s':''}</p>${d.errors?.length?`<p style="color:var(--fail);font-size:12px;margin-top:8px">${d.errors.length} could not be deleted</p>`:''}</div>`;
-  } catch(e) { $('delBtn').disabled=false; $('delBtn').textContent='Retry Delete'; showToast('Delete error: '+e); }
+  } catch(e) { 
+    $('delBtn').disabled=false; 
+    $('delBtn').innerHTML = `🗑&nbsp; Retry Delete <span id="failCount">${counts.fail}</span> FAIL Images`; 
+    showToast('Delete error: '+e); 
+  }
 });
 
 // ── Clear + CSV ───────────────────────────────────────────────────────────────
@@ -662,7 +666,7 @@ document.body.addEventListener('drop', e => {
 
 $('failOnly').addEventListener('change', () => {
   $('fileList').innerHTML='';
-  results.filter(r=>!r._deleted).forEach((r,i)=>{ if(!$('failOnly').checked||r.overall!=='pass') addToList(r,i); });
+  results.forEach((r,i)=>{ if(!r._deleted && (!$('failOnly').checked||r.overall!=='pass')) addToList(r,i); });
 });
 </script>
 </body>

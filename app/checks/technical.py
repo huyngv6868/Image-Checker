@@ -307,6 +307,9 @@ def check_borders(img: Image.Image) -> dict:
     return _result("borders", "Borders / Frame", "pass", val, "edge-to-edge", "Fills frame ✓")
 
 
+import threading
+_tesseract_sem = threading.Semaphore(2)
+
 def check_text_legibility(img: Image.Image) -> dict:
     """OCR for garbled AI text (newspapers, signs). Local, free. Skips if tesseract missing.
 
@@ -323,15 +326,26 @@ def check_text_legibility(img: Image.Image) -> dict:
         work.thumbnail((2200, 2200), Image.LANCZOS)
     arr = np.array(work)
     clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8)).apply(arr)
-    buf = io.BytesIO(); Image.fromarray(clahe).save(buf, "PNG")
+    import tempfile
+    
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+        Image.fromarray(clahe).save(f, format="PNG")
+        tmp_path = f.name
+        
     try:
         env = os.environ.copy()
         env["OMP_THREAD_LIMIT"] = "1"
-        proc = subprocess.run(["tesseract", "stdin", "stdout", "--psm", "11", "tsv"],
-                              input=buf.getvalue(), capture_output=True, timeout=120, env=env)
+        with _tesseract_sem:
+            proc = subprocess.run(["tesseract", tmp_path, "stdout", "--psm", "11", "tsv"],
+                                  capture_output=True, timeout=120, env=env)
         out = proc.stdout.decode("utf-8", "ignore")
     except Exception as e:  # noqa: BLE001
         return _result("text_legibility", "Text Legibility", "warn", "OCR error", "real words", str(e))
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
 
     words = []
     for line in out.splitlines()[1:]:
